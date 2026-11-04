@@ -116,6 +116,8 @@ public class FloatingPanelService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(30)));
 
         webView = new WebView(this);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
         webView.setBackgroundColor(Color.TRANSPARENT);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -144,9 +146,12 @@ public class FloatingPanelService extends Service {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         params = new WindowManager.LayoutParams(width, height, overlayType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
+
+        // Cho phép WebView nhận focus và mở bàn phím Android.
+        params.softInputMode =
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = x;
         params.y = y;
