@@ -185,6 +185,27 @@ public class FloatingPanelService extends Service {
         return getResources().getDisplayMetrics().heightPixels;
     }
 
+    private int systemBarHeight(String name, int fallbackDp) {
+        int id = getResources().getIdentifier(name, "dimen", "android");
+        if (id > 0) {
+            return getResources().getDimensionPixelSize(id);
+        }
+        return dp(fallbackDp);
+    }
+
+    private void applyFullscreenGeometry() {
+        int top = systemBarHeight("status_bar_height", 24);
+        int bottom = systemBarHeight("navigation_bar_height", 48);
+
+        params.x = 0;
+        params.y = top;
+        params.width = screenW();
+        params.height = Math.max(
+                dp(200),
+                screenH() - top - bottom
+        );
+    }
+
     private void saveNormalGeometry() {
         normalX = params.x;
         normalY = params.y;
@@ -217,10 +238,7 @@ public class FloatingPanelService extends Service {
             webView.setVisibility(View.VISIBLE);
 
             if (fullscreen) {
-                params.x = 0;
-                params.y = 0;
-                params.width = screenW();
-                params.height = screenH();
+                applyFullscreenGeometry();
                 resizeHandle.setVisibility(View.GONE);
             } else {
                 restoreNormalGeometry();
@@ -244,10 +262,7 @@ public class FloatingPanelService extends Service {
             }
 
             fullscreen = true;
-            params.x = 0;
-            params.y = 0;
-            params.width = screenW();
-            params.height = screenH();
+            applyFullscreenGeometry();
             webView.setVisibility(View.VISIBLE);
             resizeHandle.setVisibility(View.GONE);
             maximizeButton.setText("❐");
