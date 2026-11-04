@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.graphics.Typeface;
+import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.IBinder;
@@ -20,14 +22,23 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 
 public class FloatingPanelService extends Service {
+    public static final String EXTRA_URL = "page_url";
     private static final String CHANNEL = "vn30_floating_panel";
+    private static final String PREFS = "vn30_panel_settings";
+    private static final String KEY_URL = "page_url";
+    private static final String DEFAULT_URL = "http://127.0.0.1:8000/index_mini.html";
+
     private WindowManager windowManager;
     private View overlay;
-    private WindowManager.LayoutParams params;
+    private LinearLayout bar;
     private WebView webView;
+    private View resizeHandle;
+    private WindowManager.LayoutParams params;
+    private int savedWidth;
+    private int savedHeight;
+    private boolean minimized = false;
     private float downX, downY;
     private int startX, startY;
 
@@ -37,37 +48,55 @@ public class FloatingPanelService extends Service {
         createNotificationChannel();
         startForeground(1, buildNotification());
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        createOverlay();
     }
 
-    private void createOverlay() {
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String url = intent != null ? intent.getStringExtra(EXTRA_URL) : null;
+        if (url == null || url.trim().isEmpty()) {
+            url = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .getString(KEY_URL, DEFAULT_URL);
+        }
+        if (overlay == null) {
+            createOverlay(url);
+        } else if (webView != null && url != null) {
+            webView.loadUrl(url);
+        }
+        return START_STICKY;
+    }
+
+    private void createOverlay(String url) {
         int width = dp(520);
         int height = dp(410);
 
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackground(roundRect(0xFFF8FAFC, 0xFF94A3B8, dp(10)));
+        shell.setBackground(roundRect(Color.BLACK, Color.BLACK, dp(3)));
         shell.setClipToOutline(true);
 
-        LinearLayout bar = new LinearLayout(this);
+        bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(9), 0, dp(5), 0);
-        bar.setBackgroundColor(0xFFE8EEF5);
-        TextView title = new TextView(this);
-        title.setText("VN30  •  FLOATING");
-        title.setTextColor(0xFF172033);
-        title.setTextSize(13);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        bar.addView(title, new LinearLayout.LayoutParams(0, dp(42), 1));
+        bar.setPadding(dp(2), 0, dp(2), 0);
+        bar.setBackgroundColor(Color.BLACK);
 
+        View dragArea = new View(this);
+        bar.addView(dragArea, new LinearLayout.LayoutParams(0, dp(30), 1));
+
+        Button minimize = smallButton("－");
         Button reload = smallButton("↻");
         Button close = smallButton("×");
-        bar.addView(reload, new LinearLayout.LayoutParams(dp(40), dp(36)));
-        bar.addView(close, new LinearLayout.LayoutParams(dp(40), dp(36)));
-        shell.addView(bar);
+        LinearLayout.LayoutParams buttonParams =
+                new LinearLayout.LayoutParams(dp(31), dp(27));
+        buttonParams.setMargins(dp(1), 0, dp(1), 0);
+        bar.addView(minimize, new LinearLayout.LayoutParams(buttonParams));
+        bar.addView(reload, new LinearLayout.LayoutParams(buttonParams));
+        bar.addView(close, new LinearLayout.LayoutParams(buttonParams));
+        shell.addView(bar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(30)));
 
         webView = new WebView(this);
-        webView.setBackgroundColor(Color.WHITE);
+        webView.setBackgroundColor(Color.TRANSPARENT);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -85,14 +114,10 @@ public class FloatingPanelService extends Service {
         shell.addView(webView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
-        TextView resize = new TextView(this);
-        resize.setText("◢");
-        resize.setTextSize(17);
-        resize.setTextColor(0xFF475569);
-        resize.setGravity(Gravity.CENTER);
-        resize.setBackgroundColor(0xFFE8EEF5);
-        shell.addView(resize, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(22)));
+        resizeHandle = new View(this);
+        resizeHandle.setBackgroundColor(Color.BLACK);
+        shell.addView(resizeHandle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(4)));
 
         overlay = shell;
         int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -101,59 +126,97 @@ public class FloatingPanelService extends Service {
         params = new WindowManager.LayoutParams(width, height, overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                android.graphics.PixelFormat.TRANSLUCENT);
+                PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = dp(18);
         params.y = dp(90);
+        savedWidth = width;
+        savedHeight = height;
         windowManager.addView(overlay, params);
 
-        bar.setOnTouchListener((v, event) -> {
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    downX = event.getRawX();
-                    downY = event.getRawY();
-                    startX = params.x;
-                    startY = params.y;
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    params.x = startX + (int) (event.getRawX() - downX);
-                    params.y = startY + (int) (event.getRawY() - downY);
-                    windowManager.updateViewLayout(overlay, params);
-                    return true;
-            }
-            return false;
+        dragArea.setOnTouchListener(this::handleDrag);
+        minimize.setOnClickListener(v -> toggleMinimize(minimize));
+        reload.setOnClickListener(v -> {
+            if (webView != null) webView.reload();
         });
-
-        reload.setOnClickListener(v -> webView.reload());
         close.setOnClickListener(v -> stopSelf());
+        resizeHandle.setOnTouchListener(this::handleResize);
 
-        resize.setOnTouchListener((v, event) -> {
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    downX = event.getRawX();
-                    downY = event.getRawY();
-                    startX = params.width;
-                    startY = params.height;
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    params.width = Math.max(dp(320), startX + (int)(event.getRawX() - downX));
-                    params.height = Math.max(dp(230), startY + (int)(event.getRawY() - downY));
-                    windowManager.updateViewLayout(overlay, params);
-                    return true;
-            }
-            return false;
-        });
+        webView.loadUrl(url);
+    }
 
-        webView.loadUrl("http://127.0.0.1:8000/index_mini.html");
+    private void toggleMinimize(Button button) {
+        if (!minimized) {
+            savedWidth = params.width;
+            savedHeight = params.height;
+            webView.setVisibility(View.GONE);
+            resizeHandle.setVisibility(View.GONE);
+            params.width = dp(112);
+            params.height = dp(30);
+            minimized = true;
+            button.setText("□");
+        } else {
+            params.width = savedWidth;
+            params.height = savedHeight;
+            webView.setVisibility(View.VISIBLE);
+            resizeHandle.setVisibility(View.VISIBLE);
+            minimized = false;
+            button.setText("－");
+        }
+        windowManager.updateViewLayout(overlay, params);
+    }
+
+    private boolean handleDrag(View v, MotionEvent event) {
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                downX = event.getRawX();
+                downY = event.getRawY();
+                startX = params.x;
+                startY = params.y;
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                params.x = startX + (int) (event.getRawX() - downX);
+                params.y = startY + (int) (event.getRawY() - downY);
+                windowManager.updateViewLayout(overlay, params);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private boolean handleResize(View v, MotionEvent event) {
+        if (minimized) return false;
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                downX = event.getRawX();
+                downY = event.getRawY();
+                startX = params.width;
+                startY = params.height;
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                params.width = Math.max(dp(320),
+                        startX + (int) (event.getRawX() - downX));
+                params.height = Math.max(dp(230),
+                        startY + (int) (event.getRawY() - downY));
+                windowManager.updateViewLayout(overlay, params);
+                return true;
+            default:
+                return false;
+        }
     }
 
     private Button smallButton(String label) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(18);
-        b.setTextColor(0xFF172033);
+        b.setTextSize(16);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
         b.setPadding(0, 0, 0, 0);
-        b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFDCE5EF));
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setBackgroundTintList(ColorStateList.valueOf(0xFF242424));
         return b;
     }
 
@@ -185,11 +248,6 @@ public class FloatingPanelService extends Service {
 
     private int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY;
     }
 
     @Override
