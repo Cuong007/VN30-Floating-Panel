@@ -146,7 +146,8 @@ public class FloatingPanelService extends Service {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         params = new WindowManager.LayoutParams(width, height, overlayType,
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT);
 
         // Cho phép WebView nhận focus và mở bàn phím Android.
@@ -174,6 +175,10 @@ public class FloatingPanelService extends Service {
         if (!minimized) {
             savedWidth = params.width;
             savedHeight = params.height;
+
+            // Thu nhỏ: không giữ focus, cho phép thao tác ứng dụng phía dưới.
+            params.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+
             webView.setVisibility(View.GONE);
             resizeHandle.setVisibility(View.GONE);
             params.width = dp(112);
@@ -181,6 +186,9 @@ public class FloatingPanelService extends Service {
             minimized = true;
             button.setText("□");
         } else {
+            // Mở rộng: lấy lại focus để WebView nhập liệu và gọi bàn phím.
+            params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+
             params.width = savedWidth;
             params.height = savedHeight;
             webView.setVisibility(View.VISIBLE);
