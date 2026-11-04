@@ -11,7 +11,9 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -28,7 +30,15 @@ public class FloatingPanelService extends Service {
     private static final String CHANNEL = "vn30_floating_panel";
     private static final String PREFS = "vn30_panel_settings";
     private static final String KEY_URL = "page_url";
+    private static final String KEY_X = "window_x";
+    private static final String KEY_Y = "window_y";
+    private static final String KEY_WIDTH = "window_width";
+    private static final String KEY_HEIGHT = "window_height";
     private static final String DEFAULT_URL = "http://127.0.0.1:8000/index_mini.html";
+    private static final int SAVE_DELAY_MS = 250;
+
+    private final Handler saveHandler = new Handler(Looper.getMainLooper());
+    private final Runnable saveWindowRunnable = this::saveWindowState;
 
     private WindowManager windowManager;
     private View overlay;
@@ -66,8 +76,18 @@ public class FloatingPanelService extends Service {
     }
 
     private void createOverlay(String url) {
-        int width = dp(520);
-        int height = dp(410);
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+
+        int defaultWidth = dp(520);
+        int defaultHeight = dp(410);
+        int minWidth = Math.min(dp(320), screenWidth);
+        int minHeight = Math.min(dp(230), screenHeight);
+        int width = clamp(prefs.getInt(KEY_WIDTH, defaultWidth), minWidth, screenWidth);
+        int height = clamp(prefs.getInt(KEY_HEIGHT, defaultHeight), minHeight, screenHeight);
+        int x = clamp(prefs.getInt(KEY_X, dp(18)), 0, Math.max(0, screenWidth - width));
+        int y = clamp(prefs.getInt(KEY_Y, dp(90)), 0, Math.max(0, screenHeight - height));
 
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
@@ -128,8 +148,8 @@ public class FloatingPanelService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
-        params.x = dp(18);
-        params.y = dp(90);
+        params.x = x;
+        params.y = y;
         savedWidth = width;
         savedHeight = height;
         windowManager.addView(overlay, params);
@@ -164,6 +184,7 @@ public class FloatingPanelService extends Service {
             button.setText("－");
         }
         windowManager.updateViewLayout(overlay, params);
+        scheduleSaveWindowState();
     }
 
     private boolean handleDrag(View v, MotionEvent event) {
@@ -178,6 +199,11 @@ public class FloatingPanelService extends Service {
                 params.x = startX + (int) (event.getRawX() - downX);
                 params.y = startY + (int) (event.getRawY() - downY);
                 windowManager.updateViewLayout(overlay, params);
+                scheduleSaveWindowState();
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                scheduleSaveWindowState();
                 return true;
             default:
                 return false;
@@ -199,10 +225,37 @@ public class FloatingPanelService extends Service {
                 params.height = Math.max(dp(230),
                         startY + (int) (event.getRawY() - downY));
                 windowManager.updateViewLayout(overlay, params);
+                scheduleSaveWindowState();
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                scheduleSaveWindowState();
                 return true;
             default:
                 return false;
         }
+    }
+
+    private void scheduleSaveWindowState() {
+        saveHandler.removeCallbacks(saveWindowRunnable);
+        saveHandler.postDelayed(saveWindowRunnable, SAVE_DELAY_MS);
+    }
+
+    private void saveWindowState() {
+        if (params == null || overlay == null) return;
+        int width = minimized ? savedWidth : params.width;
+        int height = minimized ? savedHeight : params.height;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt(KEY_X, params.x)
+                .putInt(KEY_Y, params.y)
+                .putInt(KEY_WIDTH, width)
+                .putInt(KEY_HEIGHT, height)
+                .apply();
+    }
+
+    private int clamp(int value, int min, int max) {
+        if (max < min) return max;
+        return Math.max(min, Math.min(max, value));
     }
 
     private Button smallButton(String label) {
@@ -252,6 +305,9 @@ public class FloatingPanelService extends Service {
 
     @Override
     public void onDestroy() {
+        saveHandler.removeCallbacks(saveWindowRunnable);
+        // Lưu ngay cả khi người dùng đóng app khi cửa sổ đang thu nhỏ.
+        saveWindowState();
         if (overlay != null && windowManager != null) {
             try { windowManager.removeView(overlay); } catch (Exception ignored) {}
         }
