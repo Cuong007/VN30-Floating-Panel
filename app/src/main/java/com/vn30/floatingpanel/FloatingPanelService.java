@@ -46,9 +46,10 @@ public class FloatingPanelService extends Service {
     private WebView webView;
     private View resizeHandle;
     private WindowManager.LayoutParams params;
-    private int savedWidth;
-    private int savedHeight;
+    private int normalX, normalY, normalWidth, normalHeight;
     private boolean minimized = false;
+    private boolean fullscreen = false;
+    private Button minimizeButton, maximizeButton;
     private float downX, downY;
     private int startX, startY;
 
@@ -103,13 +104,15 @@ public class FloatingPanelService extends Service {
         View dragArea = new View(this);
         bar.addView(dragArea, new LinearLayout.LayoutParams(0, dp(30), 1));
 
-        Button minimize = smallButton("－");
+        minimizeButton = smallButton("－");
+        maximizeButton = smallButton("□");
         Button reload = smallButton("↻");
         Button close = smallButton("×");
         LinearLayout.LayoutParams buttonParams =
                 new LinearLayout.LayoutParams(dp(31), dp(27));
         buttonParams.setMargins(dp(1), 0, dp(1), 0);
-        bar.addView(minimize, new LinearLayout.LayoutParams(buttonParams));
+        bar.addView(minimizeButton, new LinearLayout.LayoutParams(buttonParams));
+        bar.addView(maximizeButton, new LinearLayout.LayoutParams(buttonParams));
         bar.addView(reload, new LinearLayout.LayoutParams(buttonParams));
         bar.addView(close, new LinearLayout.LayoutParams(buttonParams));
         shell.addView(bar, new LinearLayout.LayoutParams(
@@ -156,12 +159,15 @@ public class FloatingPanelService extends Service {
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = x;
         params.y = y;
-        savedWidth = width;
-        savedHeight = height;
+        normalX = x;
+        normalY = y;
+        normalWidth = width;
+        normalHeight = height;
         windowManager.addView(overlay, params);
 
         dragArea.setOnTouchListener(this::handleDrag);
-        minimize.setOnClickListener(v -> toggleMinimize(minimize));
+        minimizeButton.setOnClickListener(v -> toggleMinimize());
+        maximizeButton.setOnClickListener(v -> toggleFullscreen());
         reload.setOnClickListener(v -> {
             if (webView != null) webView.reload();
         });
@@ -171,36 +177,97 @@ public class FloatingPanelService extends Service {
         webView.loadUrl(url);
     }
 
-    private void toggleMinimize(Button button) {
+    private int screenW() {
+        return getResources().getDisplayMetrics().widthPixels;
+    }
+
+    private int screenH() {
+        return getResources().getDisplayMetrics().heightPixels;
+    }
+
+    private void saveNormalGeometry() {
+        normalX = params.x;
+        normalY = params.y;
+        normalWidth = params.width;
+        normalHeight = params.height;
+    }
+
+    private void restoreNormalGeometry() {
+        params.width = Math.min(normalWidth, screenW());
+        params.height = Math.min(normalHeight, screenH());
+        params.x = clamp(normalX, 0, Math.max(0, screenW() - params.width));
+        params.y = clamp(normalY, 0, Math.max(0, screenH() - params.height));
+    }
+
+    private void toggleMinimize() {
         if (!minimized) {
-            savedWidth = params.width;
-            savedHeight = params.height;
+            if (!fullscreen) saveNormalGeometry();
 
-            // Thu nhỏ: không giữ focus, cho phép thao tác ứng dụng phía dưới.
             params.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-
             webView.setVisibility(View.GONE);
             resizeHandle.setVisibility(View.GONE);
-            params.width = dp(112);
+            params.width = dp(150);
             params.height = dp(30);
             minimized = true;
-            button.setText("□");
+            minimizeButton.setText("□");
         } else {
-            // Mở rộng: lấy lại focus để WebView nhập liệu và gọi bàn phím.
             params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            minimized = false;
+            minimizeButton.setText("－");
+            webView.setVisibility(View.VISIBLE);
 
-            params.width = savedWidth;
-            params.height = savedHeight;
+            if (fullscreen) {
+                params.x = 0;
+                params.y = 0;
+                params.width = screenW();
+                params.height = screenH();
+                resizeHandle.setVisibility(View.GONE);
+            } else {
+                restoreNormalGeometry();
+                resizeHandle.setVisibility(View.VISIBLE);
+            }
+        }
+
+        windowManager.updateViewLayout(overlay, params);
+        scheduleSaveWindowState();
+    }
+
+    private void toggleFullscreen() {
+        if (!fullscreen) {
+            if (minimized) {
+                minimized = false;
+                minimizeButton.setText("－");
+                webView.setVisibility(View.VISIBLE);
+                params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            } else {
+                saveNormalGeometry();
+            }
+
+            fullscreen = true;
+            params.x = 0;
+            params.y = 0;
+            params.width = screenW();
+            params.height = screenH();
+            webView.setVisibility(View.VISIBLE);
+            resizeHandle.setVisibility(View.GONE);
+            maximizeButton.setText("❐");
+        } else {
+            fullscreen = false;
+            minimized = false;
+            params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            restoreNormalGeometry();
             webView.setVisibility(View.VISIBLE);
             resizeHandle.setVisibility(View.VISIBLE);
-            minimized = false;
-            button.setText("－");
+            minimizeButton.setText("－");
+            maximizeButton.setText("□");
         }
+
         windowManager.updateViewLayout(overlay, params);
         scheduleSaveWindowState();
     }
 
     private boolean handleDrag(View v, MotionEvent event) {
+        if (fullscreen) return false;
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
                 downX = event.getRawX();
@@ -211,6 +278,8 @@ public class FloatingPanelService extends Service {
             case MotionEvent.ACTION_MOVE:
                 params.x = startX + (int) (event.getRawX() - downX);
                 params.y = startY + (int) (event.getRawY() - downY);
+                normalX = params.x;
+                normalY = params.y;
                 windowManager.updateViewLayout(overlay, params);
                 scheduleSaveWindowState();
                 return true;
@@ -224,7 +293,7 @@ public class FloatingPanelService extends Service {
     }
 
     private boolean handleResize(View v, MotionEvent event) {
-        if (minimized) return false;
+        if (minimized || fullscreen) return false;
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
                 downX = event.getRawX();
@@ -237,6 +306,8 @@ public class FloatingPanelService extends Service {
                         startX + (int) (event.getRawX() - downX));
                 params.height = Math.max(dp(230),
                         startY + (int) (event.getRawY() - downY));
+                normalWidth = params.width;
+                normalHeight = params.height;
                 windowManager.updateViewLayout(overlay, params);
                 scheduleSaveWindowState();
                 return true;
@@ -256,13 +327,11 @@ public class FloatingPanelService extends Service {
 
     private void saveWindowState() {
         if (params == null || overlay == null) return;
-        int width = minimized ? savedWidth : params.width;
-        int height = minimized ? savedHeight : params.height;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putInt(KEY_X, params.x)
-                .putInt(KEY_Y, params.y)
-                .putInt(KEY_WIDTH, width)
-                .putInt(KEY_HEIGHT, height)
+                .putInt(KEY_X, normalX)
+                .putInt(KEY_Y, normalY)
+                .putInt(KEY_WIDTH, normalWidth)
+                .putInt(KEY_HEIGHT, normalHeight)
                 .apply();
     }
 
